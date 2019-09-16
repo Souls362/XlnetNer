@@ -413,25 +413,26 @@ def get_model_fn(labels):
         scaffold_fn = model_utils.init_from_checkpoint(FLAGS)
 
         if mode == tf.estimator.ModeKeys.EVAL:
-            def metric_fn(label_ids, logits, num_labels=12, open_labels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]):
-                predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-                precision = tf_metrics.precision(label_ids, predictions, num_labels, open_labels, average='marco')
-                recall = tf_metrics.recall(label_ids, predictions, num_labels, open_labels, average='marco')
-                f = tf_metrics.f1(label_ids, predictions, num_labels, open_labels, average='marco')
-                return {
-                    "eval_precision": precision,
-                    "eval_recall": recall,
-                    "eval_f": f
-                }
-
-            eval_metrics = (metric_fn, [label_ids, logits, num_labels, open_labels])
-            eval_spec = tf.estimator.TPUEstimatorSpec(
-                mode=mode,
-                loss=total_loss,
-                eval_metrics=eval_metrics,
-                scaffold_fn=scaffold_fn
-            )
-            return eval_spec
+            #Eval部分重新改写
+            # def metric_fn(label_ids, logits, num_labels=12, open_labels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]):
+            #     predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
+            #     precision = tf_metrics.precision(label_ids, predictions, num_labels, open_labels, average='marco')
+            #     recall = tf_metrics.recall(label_ids, predictions, num_labels, open_labels, average='marco')
+            #     f = tf_metrics.f1(label_ids, predictions, num_labels, open_labels, average='marco')
+            #     return {
+            #         "eval_precision": precision,
+            #         "eval_recall": recall,
+            #         "eval_f": f
+            #     }
+            #
+            # eval_metrics = (metric_fn, [label_ids, logits, num_labels, open_labels])
+            # eval_spec = tf.estimator.TPUEstimatorSpec(
+            #     mode=mode,
+            #     loss=total_loss,
+            #     eval_metrics=eval_metrics,
+            #     scaffold_fn=scaffold_fn
+            # )
+            # return eval_spec
 
         elif mode == tf.estimator.ModeKeys.PREDICT:
             label_ids = tf.reshape(features["label_ids"], [-1])
