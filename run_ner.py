@@ -223,7 +223,7 @@ class NerProcessor(DataProcessor):
 
     def get_test_examples(self, data_dir):
         return self._create_example(
-            self._read_data(os.path.join(data_dir, "test_part.txt")), "test")
+            self._read_data(os.path.join(data_dir, "test.txt")), "test")
 
     def get_labels(self):
         """See base class."""
