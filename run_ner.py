@@ -21,7 +21,7 @@ import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
 
 import sentencepiece as spm
-
+import metrics
 from data_utils import SEP_ID, VOCAB_SIZE, CLS_ID
 import model_utils
 import function_builder
@@ -223,13 +223,13 @@ class NerProcessor(DataProcessor):
 
     def get_test_examples(self, data_dir):
         return self._create_example(
-            self._read_data(os.path.join(data_dir, "test.txt")), "test")
+            self._read_data(os.path.join(data_dir, "test_part.txt")), "test")
 
     def get_labels(self):
         """See base class."""
         # return ["[PAD]", "o", "B-AS", "I-AS", "B-OP", "I-OP", "X", "[CLS]", "[SEP]"]
         # return ["O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X", "[CLS]", "[SEP]"]
-        return ["B-MISC", "I-MISC", "O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X", "[CLS]", "[SEP]"]
+        return ["[PAD]","O","B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X", "[CLS]", "[SEP]"]
 
     def _create_example(self, lines, set_type):
         """Creates examples for the training and dev sets."""
@@ -281,10 +281,10 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
         ntokens.append(token)
         segment_ids.append(0)
         label_ids.append(label_map[labels[i]])
-    ntokens.append("[SEP]")
-    segment_ids.append(0)
+    #ntokens.append("[SEP]")
+    #segment_ids.append(0)
     # append("O") or append("[SEP]") not sure!
-    label_ids.append(label_map["[SEP]"])
+    #label_ids.append(label_map["[SEP]"])
     for i in ntokens:
         input_ids.append(tokenize_fn(i))
     input_mask = [1] * len(input_ids)
@@ -306,11 +306,11 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
     if ex_index < 3:
         tf.logging.info("*** Example ***")
         tf.logging.info("guid: %s" % (example.guid))
-        tf.logging.info("tokens %s" % " ".join([printable_text(x) for x in tokens]))
-        tf.logging.info("input_ids %s" % " ".join([str(x) for x in input_ids]))
-        tf.logging.info("input_mask %s" % " ".join([str(x) for x in input_mask]))
-        tf.logging.info("segment_ids %s" % " ".join([str(x) for x in segment_ids]))
-        tf.logging.info("label_ids %s" % " ".join([str(x) for x in label_ids]))
+        tf.logging.info("tokens: %s" % " ".join([printable_text(x) for x in tokens]))
+        tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+        tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+        tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+        tf.logging.info("label_ids: %s" % " ".join([str(x) for x in label_ids]))
 
     # print('input_ids')
     # print(input_ids)
@@ -388,10 +388,9 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
     return input_fn
 
 
-def get_model_fn(labels):
+def get_model_fn(num_labels):
     def model_fn(features, labels, mode, params):
 
-        num_labels = 12
         for name in sorted(features.keys()):
             logging.info("  name = %s, shape = %s" % (name, features[name].shape))
         input_ids = features["input_ids"]
@@ -413,35 +412,30 @@ def get_model_fn(labels):
         scaffold_fn = model_utils.init_from_checkpoint(FLAGS)
 
         if mode == tf.estimator.ModeKeys.EVAL:
-            #Eval部分重新改写
-            # def metric_fn(label_ids, logits, num_labels=12, open_labels=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]):
-            #     predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-            #     precision = tf_metrics.precision(label_ids, predictions, num_labels, open_labels, average='marco')
-            #     recall = tf_metrics.recall(label_ids, predictions, num_labels, open_labels, average='marco')
-            #     f = tf_metrics.f1(label_ids, predictions, num_labels, open_labels, average='marco')
-            #     return {
-            #         "eval_precision": precision,
-            #         "eval_recall": recall,
-            #         "eval_f": f
-            #     }
-            #
-            # eval_metrics = (metric_fn, [label_ids, logits, num_labels, open_labels])
-            # eval_spec = tf.estimator.TPUEstimatorSpec(
-            #     mode=mode,
-            #     loss=total_loss,
-            #     eval_metrics=eval_metrics,
-            #     scaffold_fn=scaffold_fn
-            # )
-            # return eval_spec
+            def metric_fn(label_ids, logits, num_labels, mask):
+                predictions = tf.math.argmax(logits, axis=-1, output_type=tf.int32)
+                cm = metrics.streaming_confusion_matrix(label_ids, predictions, num_labels - 1, weights=mask)
+                return {
+                    "confusion_matrix": cm
+                }
+                #
+
+            eval_metrics = (metric_fn, [label_ids, logits, num_labels, mask])
+            eval_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                mode=mode,
+                loss=total_loss,
+                eval_metrics=eval_metrics,
+                scaffold_fn=scaffold_fn)
+            return eval_spec
 
         elif mode == tf.estimator.ModeKeys.PREDICT:
-            label_ids = tf.reshape(features["label_ids"], [-1])
-            predictions = {
-                "predicts": predicts,
-            }
-            print('predicts')
-            output_spec = tf.estimator.EstimatorSpec(
-                mode=mode, predictions=predictions)
+            #label_ids = tf.reshape(features["label_ids"], [-1])
+            # predictions = {
+            #     "predicts": predicts,
+            # }
+            #print('predicts')
+            output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                mode=mode, predictions=predicts, scaffold_fn=scaffold_fn)
             return output_spec
 
         #### Configuring the optimizer
@@ -451,23 +445,26 @@ def get_model_fn(labels):
         monitor_dict["lr"] = learning_rate
 
         #### Constucting training TPUEstimatorSpec with new cache.
-        train_spec = tf.estimator.EstimatorSpec(
-            mode=mode, loss=total_loss, train_op=train_op)
+        #train_spec = tf.estimator.EstimatorSpec(
+        #    mode=mode, loss=total_loss, train_op=train_op)
+        train_spec = tf.contrib.tpu.TPUEstimatorSpec(
+            mode=mode, loss=total_loss, train_op=train_op, scaffold_fn=scaffold_fn)
+
 
         return train_spec
 
     return model_fn
 
 
-def _write_base(batch_tokens,id2label,prediction,batch_labels,wf,i):
+def _write_base(batch_tokens, id2label, prediction, batch_labels, wf, i):
     token = batch_tokens[i]
     predict = id2label[prediction]
     true_l = id2label[batch_labels[i]]
-    if token!="[PAD]" and token!="[CLS]" and true_l!="X":
+    if token != "[PAD]" and token != "[CLS]" and true_l != "X":
         #
-        if predict=="X" and not predict.startswith("##"):
-            predict="O"
-        line = "{}\t{}\t{}\n".format(token,true_l,predict)
+        if predict == "X" and not predict.startswith("##"):
+            predict = "O"
+        line = "{}\t{}\t{}\n".format(token, true_l, predict)
         wf.write(line)
 
 
@@ -516,28 +513,30 @@ def main(_):
 
     def tokenize_fn(text):
         text = preprocess_text(text, lower=FLAGS.uncased)
+        if sp.PieceToId(text) == 0:
+            return 99999
         return sp.PieceToId(text)
 
     run_config = model_utils.configure_tpu(FLAGS)
 
-    model_fn = get_model_fn(label_list)
+    model_fn = get_model_fn(len(label_list))
 
     spm_basename = os.path.basename(FLAGS.spiece_model_file)
 
     # If TPU is not available, this will fall back to normal Estimator on CPU
     # or GPU.
-    if FLAGS.use_tpu:
-        estimator = tf.contrib.tpu.TPUEstimator(
+    #if FLAGS.use_tpu:
+    estimator = tf.contrib.tpu.TPUEstimator(
             use_tpu=FLAGS.use_tpu,
             model_fn=model_fn,
             config=run_config,
             train_batch_size=FLAGS.train_batch_size,
             predict_batch_size=FLAGS.predict_batch_size,
             eval_batch_size=FLAGS.eval_batch_size)
-    else:
-        estimator = tf.estimator.Estimator(
-            model_fn=model_fn,
-            config=run_config)
+    #else:
+    #    estimator = tf.estimator.Estimator(
+    #        model_fn=model_fn,
+    #        config=run_config)
 
     if FLAGS.do_train:
         train_file_base = "{}.len-{}.train.tf_record".format(
@@ -563,86 +562,44 @@ def main(_):
 
         estimator.train(input_fn=train_input_fn, max_steps=FLAGS.train_steps)
 
-    if FLAGS.do_eval or FLAGS.do_predict:
-        if FLAGS.eval_split == "dev":
-            eval_examples = processor.get_dev_examples(FLAGS.data_dir)
-        else:
-            eval_examples = processor.get_test_examples(FLAGS.data_dir)
-
-        tf.logging.info("Num of eval samples: {}".format(len(eval_examples)))
+    # if FLAGS.do_eval or FLAGS.do_predict:
+    #     if FLAGS.eval_split == "dev":
+    #         eval_examples = processor.get_dev_examples(FLAGS.data_dir)
+    #     else:
+    #         eval_examples = processor.get_test_examples(FLAGS.data_dir)
+    #
+    #     tf.logging.info("Num of eval samples: {}".format(len(eval_examples)))
 
     if FLAGS.do_eval:
-        # TPU requires a fixed batch size for all batches, therefore the number
-        # of examples must be a multiple of the batch size, or else examples
-        # will get dropped. So we pad with fake examples which are ignored
-        # later on. These do NOT count towards the metric (all tf.metrics
-        # support a per-instance weight, and these get a weight of 0.0).
-        #
-        # Modified in XL: We also adopt the same mechanism for GPUs.
-        while len(eval_examples) % FLAGS.eval_batch_size != 0:
-            eval_examples.append(PaddingInputExample())
-
-        eval_file_base = "{}.len-{}.{}.eval.tf_record".format(
-            spm_basename, FLAGS.max_seq_length, FLAGS.eval_split)
-        eval_file = os.path.join(FLAGS.output_dir, eval_file_base)
-
+        eval_examples = processor.get_dev_examples(FLAGS.data_dir)
+        eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
         file_based_convert_examples_to_features(
             eval_examples, label_list, FLAGS.max_seq_length, tokenize_fn,
             eval_file)
 
-        assert len(eval_examples) % FLAGS.eval_batch_size == 0
-        eval_steps = int(len(eval_examples) // FLAGS.eval_batch_size)
-
+        logging.info("***** Running evaluation *****")
+        logging.info("  Num examples = %d", len(eval_examples))
+        logging.info("  Batch size = %d", FLAGS.eval_batch_size)
+        # if FLAGS.use_tpu:
+        #     eval_steps = int(len(eval_examples) / FLAGS.eval_batch_size)
+        # eval_drop_remainder = True if FLAGS.use_tpu else False
         eval_input_fn = file_based_input_fn_builder(
             input_file=eval_file,
             seq_length=FLAGS.max_seq_length,
             is_training=False,
             drop_remainder=True,
             batch_size=FLAGS.train_batch_size)
-
-        # Filter out all checkpoints in the directory
-        steps_and_files = []
-        filenames = tf.gfile.ListDirectory(FLAGS.model_dir)
-
-        for filename in filenames:
-            if filename.endswith(".index"):
-                ckpt_name = filename[:-6]
-                cur_filename = join(FLAGS.model_dir, ckpt_name)
-                global_step = int(cur_filename.split("-")[-1])
-                tf.logging.info("Add {} to eval list.".format(cur_filename))
-                steps_and_files.append([global_step, cur_filename])
-        steps_and_files = sorted(steps_and_files, key=lambda x: x[0])
-
-        # Decide whether to evaluate all ckpts
-        if not FLAGS.eval_all_ckpt:
-            steps_and_files = steps_and_files[-1:]
-
-        eval_results = []
-        for global_step, filename in sorted(steps_and_files, key=lambda x: x[0]):
-            ret = estimator.evaluate(
-                input_fn=eval_input_fn,
-                steps=eval_steps,
-                checkpoint_path=filename)
-
-            ret["step"] = global_step
-            ret["path"] = filename
-
-            eval_results.append(ret)
-
-            tf.logging.info("=" * 80)
-            log_str = "Eval result | "
-            for key, val in sorted(ret.items(), key=lambda x: x[0]):
-                log_str += "{} {} | ".format(key, val)
-            tf.logging.info(log_str)
-
-        key_name = "eval_pearsonr" if FLAGS.is_regression else "eval_accuracy"
-        eval_results.sort(key=lambda x: x[key_name], reverse=True)
-
-        tf.logging.info("=" * 80)
-        log_str = "Best result | "
-        for key, val in sorted(eval_results[0].items(), key=lambda x: x[0]):
-            log_str += "{} {} | ".format(key, val)
-        tf.logging.info(log_str)
+        result = estimator.evaluate(input_fn=eval_input_fn)
+        output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
+        with open(output_eval_file, "w") as wf:
+            logging.info("***** Eval results *****")
+            confusion_matrix = result["confusion_matrix"]
+            p, r, f = metrics.calculate(confusion_matrix, len(label_list) - 1)
+            logging.info("***********************************************")
+            logging.info("********************P = %s*********************", str(p))
+            logging.info("********************R = %s*********************", str(r))
+            logging.info("********************F = %s*********************", str(f))
+            logging.info("***********************************************")
 
     if FLAGS.do_predict:
         # eval_file_base = "{}.len-{}.{}.predict.tf_record".format(
@@ -669,13 +626,13 @@ def main(_):
 
         result = estimator.predict(input_fn=pred_input_fn)
         output_predict_file = os.path.join(FLAGS.output_dir, "label_test.txt")
-        #print(result)
-        #print(list(result))
-        
-        #print(result['predicts'])
+        # print(result)
+        print(list(result))
+
+        # print(result['predicts'])
         # here if the tag is "X" means it belong to its before token, here for convenient evaluate use
         # conlleval.pl we  discarding it directly
-        #Writer(output_predict_file, result, batch_tokens, batch_labels, id2label)
+        # Writer(output_predict_file, result, batch_tokens, batch_labels, id2label)
 
 
 if __name__ == "__main__":
